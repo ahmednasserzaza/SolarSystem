@@ -196,6 +196,7 @@ private val StatNoteStyle = TextStyle(
 
 private val HeaderEarthSize = 220.dp
 private val EndHeaderHeight = 300.dp
+private val SwipeHintHeight = 160.dp
 private val CardHeight = 300.dp
 private val CardGap = 22.dp
 private val CardStackPeek = 16.dp
@@ -282,6 +283,7 @@ private fun endAlpha(progress: Float) = ((progress - 0.5f) / 0.5f).coerceIn(0f, 
 private fun SolarSystemScreen() {
     val density = LocalDensity.current
     val topInset = WindowInsets.systemBars.asPaddingValues().calculateTopPadding()
+    val bottomInset = WindowInsets.systemBars.asPaddingValues().calculateBottomPadding()
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenHeightPx = with(density) { maxHeight.toPx() }
@@ -316,6 +318,15 @@ private fun SolarSystemScreen() {
             targetValue = if (titleEntered) 0f else enterFromPx,
             animationSpec = EnterTween,
             label = "titleLaunch",
+        )
+
+        val hintEnterFromPx = with(density) { (SwipeHintHeight + bottomInset).toPx() }
+        var hintEntered by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { hintEntered = true }
+        val hintLaunch by animateFloatAsState(
+            targetValue = if (hintEntered) 0f else hintEnterFromPx,
+            animationSpec = EnterTween,
+            label = "hintLaunch",
         )
 
         Box(modifier = Modifier.fillMaxSize()) {
@@ -433,7 +444,11 @@ private fun SolarSystemScreen() {
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .zIndex(planets.size.toFloat())
-                    .graphicsLayer { alpha = startAlpha(progress()) },
+                    .graphicsLayer {
+                        val exit = (progress() / 0.5f).coerceIn(0f, 1f)
+                        translationY = hintLaunch + exit * hintEnterFromPx
+                        alpha = startAlpha(progress())
+                    },
             )
         }
     }

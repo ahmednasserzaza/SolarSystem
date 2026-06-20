@@ -296,6 +296,11 @@ private fun SolarSystemScreen() {
         val earthRise = earthCenterStart - earthCenterEnd
 
         val stackAnchor = with(density) { (topInset + EndHeaderHeight).toPx() }
+        // Bottom edge of the earth in its small end-state, and the gap from there down
+        // to the card stack. Re-applying this gap to the earth's live bottom edge lets the
+        // growing earth (and the title above it) push the cards down as one column.
+        val earthBottomEnd = earthCenterEnd + headerEarthPx / 2f
+        val earthCardGap = stackAnchor - earthBottomEnd
         var cardHeightPx by remember { mutableFloatStateOf(with(density) { CardHeight.toPx() }) }
         val stepPx = cardHeightPx + with(density) { CardGap.toPx() }
         val peekPx = with(density) { CardStackPeek.toPx() }
@@ -375,8 +380,15 @@ private fun SolarSystemScreen() {
                         .fillMaxWidth()
                         .onSizeChanged { cardHeightPx = it.height.toFloat() }
                         .offset {
+                            val p = progress()
+                            val scale = earthScaleStart + (1f - earthScaleStart) * p
+                            val earthCenter = earthCenterEnd + (1f - p) * earthRise
+                            val earthBottom = earthCenter + headerEarthPx / 2f * scale
+                            // The stack top follows the growing earth's bottom edge, so the
+                            // earth and title push the cards down as if in the same column.
+                            val anchor = (earthBottom + earthCardGap).coerceAtLeast(stackAnchor)
                             val natural = screenHeightPx + index * stepPx - scroll()
-                            val stick = stackAnchor + index * peekPx
+                            val stick = anchor + index * peekPx
                             IntOffset(0, natural.coerceAtLeast(stick).roundToInt())
                         }
                         .graphicsLayer {

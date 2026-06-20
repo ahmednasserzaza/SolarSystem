@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Solar System</string>
+    <string name="earth_title">Earth</string>
+    <string name="earth_subtitle">A tiny blue world drifting\nthrough the endless dark.</string>
+    <string name="swipe_to_explore">Swipe up to explore</string>
+    <string name="cd_space_background">Starry space background</string>
+    <string name="cd_earth">Planet Earth</string>
+    <string name="solar_system_title">Our Solar System</string>
+    <string name="solar_system_subtitle">Earth is only one small part of a much larger story.</string>
+    <string name="stat_weight">You Would Weigh</string>
+    <string name="stat_day">One Day</string>
+    <string name="stat_temperature">Temperature</string>
+    <string name="stat_additional">Additional info</string>
+</resources>

@@ -9,9 +9,7 @@ An Android app built with Jetpack Compose that lets you explore the planets of o
 
 ## 🎥 Demo
 
-<video src="https://github.com/ahmednasserzaza/SolarSystem/raw/main/docs/demo.mp4" controls width="320"></video>
-
-https://github.com/ahmednasserzaza/SolarSystem/raw/main/docs/demo.mp4
+https://github.com/user-attachments/assets/2b8c3243-3138-4e7b-b4b0-5e7f44af1ac4
 
 
 ## 🛠️ Tech Stack

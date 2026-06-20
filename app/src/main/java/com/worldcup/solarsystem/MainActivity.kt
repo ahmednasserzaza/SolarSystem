@@ -82,6 +82,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
@@ -182,6 +184,7 @@ private val PlanetNameStyle = TextStyle(
     fontFamily = RubikFamily,
     fontWeight = FontWeight.Bold,
     fontSize = 18.sp,
+    letterSpacing = TextUnit(0.25f, TextUnitType.Sp),
     color = White88,
 )
 
@@ -189,6 +192,7 @@ private val PlanetTaglineStyle = TextStyle(
     fontFamily = RubikFamily,
     fontWeight = FontWeight.Normal,
     fontSize = 14.sp,
+    letterSpacing = 0.25.sp,
     color = White66,
 )
 
@@ -196,6 +200,7 @@ private val StatLabelStyle = TextStyle(
     fontFamily = RubikFamily,
     fontWeight = FontWeight.Normal,
     fontSize = 12.sp,
+    letterSpacing = 0.25.sp,
     color = White66,
 )
 
@@ -203,6 +208,7 @@ private val StatValueStyle = TextStyle(
     fontFamily = RubikFamily,
     fontWeight = FontWeight.Medium,
     fontSize = 12.sp,
+    letterSpacing = 0.25.sp,
     color = White88,
 )
 
@@ -210,6 +216,7 @@ private val StatNoteStyle = TextStyle(
     fontFamily = RubikFamily,
     fontWeight = FontWeight.Normal,
     fontSize = 12.sp,
+    letterSpacing = 0.25.sp,
     lineHeight = 18.sp,
     color = White66,
 )
@@ -799,7 +806,7 @@ private fun PlanetStats(planet: Planet) {
             modifier = Modifier.padding(vertical = 16.dp),
         )
         StatRow(
-            leading = { StatCell(R.drawable.icon_thermometer, stringResource(R.string.stat_temperature), planet.temperature, it,planet.temperatureNote, ) },
+            leading = { StatCell(R.drawable.icon_thermometer, stringResource(R.string.stat_temperature), planet.temperature, it,planet.temperatureNote ) },
             trailing = { StatCell(R.drawable.icon_info, stringResource(R.string.stat_additional), planet.additionalInfo, modifier = it) },
         )
     }

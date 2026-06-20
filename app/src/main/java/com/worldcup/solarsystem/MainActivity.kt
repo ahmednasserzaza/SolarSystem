@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -13,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.pager.PagerDefaults
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +46,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -55,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.onSizeChanged
@@ -74,9 +79,15 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.shadow.Shadow as LayerShadow
+
+// region Design tokens -------------------------------------------------------
 
 private val SpaceBlack = Color(0xFF0D0608)
 private val White = Color(0xFFFFFFFF)
@@ -102,6 +113,9 @@ private val EndSkyGradient = listOf(
     Color(0xFF0F172A),
     Color(0xFF030712),
 )
+
+private val StartSkyBrush = Brush.verticalGradient(StartSkyGradient)
+private val EndSkyBrush = Brush.verticalGradient(EndSkyGradient)
 
 private val RubikFamily = FontFamily(
     Font(R.font.rubik_regular, FontWeight.Normal),
@@ -200,19 +214,40 @@ private val SwipeHintHeight = 160.dp
 private val CardHeight = 300.dp
 private val CardGap = 22.dp
 private val CardStackPeek = 16.dp
-private const val BackPlanetMinAlpha = 0.35f
 private val CardEnterRise = 60.dp
 private val PlanetOverhang = 20.dp
 private val PlanetImageSize = 112.dp
 private val PlanetGlowBlur = 100.dp
 private val EarthGlowBlur = 50.dp
 private val EarthGlowOffset = (-12).dp
+private val ScreenPadding = 24.dp
+private val TitleTopPadding = 56.dp
+private val SwipeHintBottomPadding = 28.dp
+private val ChevronSize = 28.dp
 
+private const val BackPlanetMinAlpha = 0.35f
+private const val StarFieldAlpha = 0.4f
+private const val EarthImageFade = 0.5f
+private const val EarthStartWidthFactor = 2f
+private const val EarthStartCenterFactor = 0.24f
+private const val MidProgress = 0.5f
 private const val CardEnterDurationMs = 450
 private const val CardStaggerMs = 80
 
 private val TransitionSpring = spring<Float>(dampingRatio = 0.80f, stiffness = 16f)
 private val EnterTween = tween<Float>(durationMillis = 700, easing = FastOutSlowInEasing)
+
+// endregion
+
+// region Transition curves ---------------------------------------------------
+
+private fun startAlpha(progress: Float) = (1f - progress / MidProgress).coerceIn(0f, 1f)
+
+private fun endAlpha(progress: Float) = ((progress - MidProgress) / MidProgress).coerceIn(0f, 1f)
+
+private fun exitFraction(progress: Float) = 1f - startAlpha(progress)
+
+// endregion
 
 private enum class CardSlot { Card, Header }
 
@@ -275,195 +310,264 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun startAlpha(progress: Float) = (1f - progress / 0.5f).coerceIn(0f, 1f)
+@Immutable
+private class TransitionMetrics(
+    private val screenHeightPx: Float,
+    private val headerEarthPx: Float,
+    val earthTopEnd: Dp,
+    private val earthCenterEnd: Float,
+    val earthScaleStart: Float,
+    val earthRise: Float,
+    private val stackAnchor: Float,
+    private val earthCardGap: Float,
+    private val stepPx: Float,
+    private val peekPx: Float,
+    val transitionPx: Float,
+    val enterFromPx: Float,
+    val hintEnterFromPx: Float,
+) {
+    fun scrollOf(page: Float): Float =
+        if (page <= 1f) page * transitionPx
+        else transitionPx + (page - 1f) * (stepPx - peekPx)
 
-private fun endAlpha(progress: Float) = ((progress - 0.5f) / 0.5f).coerceIn(0f, 1f)
+    fun progressOf(scroll: Float): Float = (scroll / transitionPx).coerceIn(0f, 1f)
+
+    fun earthScale(progress: Float): Float = lerp(earthScaleStart, 1f, progress)
+
+    fun cardOffsetY(index: Int, scroll: Float, progress: Float): Int {
+        val natural = screenHeightPx + index * stepPx - scroll
+        val stick = stackTop(progress) + index * peekPx
+        return natural.coerceAtLeast(stick).roundToInt()
+    }
+
+    fun planetDepthAlpha(index: Int, scroll: Float): Float {
+        val frontPos = ((scroll - transitionPx) / (stepPx - peekPx)).coerceAtLeast(0f)
+        val depth = (frontPos - index).coerceIn(0f, 1f)
+        return 1f - depth * (1f - BackPlanetMinAlpha)
+    }
+
+    private fun stackTop(progress: Float): Float {
+        val earthBottom = earthCenterEnd + (1f - progress) * earthRise +
+            headerEarthPx / 2f * earthScale(progress)
+        return (earthBottom + earthCardGap).coerceAtLeast(stackAnchor)
+    }
+}
+
+@Composable
+private fun rememberTransitionMetrics(
+    maxWidth: Dp,
+    maxHeight: Dp,
+    topInset: Dp,
+    bottomInset: Dp,
+    cardHeightPx: Float,
+): TransitionMetrics {
+    val density = LocalDensity.current
+    return remember(maxWidth, maxHeight, topInset, bottomInset, cardHeightPx, density) {
+        with(density) {
+            val screenHeightPx = maxHeight.toPx()
+            val headerEarthPx = HeaderEarthSize.toPx()
+            val earthTopEnd = topInset + (EndHeaderHeight - HeaderEarthSize) / 2
+            val earthCenterEnd = earthTopEnd.toPx() + headerEarthPx / 2f
+            val startEarthWidth = maxWidth.toPx() * EarthStartWidthFactor
+            val earthCenterStart = screenHeightPx - startEarthWidth * EarthStartCenterFactor
+            val stackAnchor = (topInset + EndHeaderHeight).toPx()
+            val earthBottomEnd = earthCenterEnd + headerEarthPx / 2f
+            TransitionMetrics(
+                screenHeightPx = screenHeightPx,
+                headerEarthPx = headerEarthPx,
+                earthTopEnd = earthTopEnd,
+                earthCenterEnd = earthCenterEnd,
+                earthScaleStart = startEarthWidth / headerEarthPx,
+                earthRise = earthCenterStart - earthCenterEnd,
+                stackAnchor = stackAnchor,
+                earthCardGap = stackAnchor - earthBottomEnd,
+                stepPx = cardHeightPx + CardGap.toPx(),
+                peekPx = CardStackPeek.toPx(),
+                transitionPx = (screenHeightPx - stackAnchor).coerceAtLeast(1f),
+                enterFromPx = -(EndHeaderHeight + topInset).toPx(),
+                hintEnterFromPx = (SwipeHintHeight + bottomInset).toPx(),
+            )
+        }
+    }
+}
 
 @Composable
 private fun SolarSystemScreen() {
     val density = LocalDensity.current
-    val topInset = WindowInsets.systemBars.asPaddingValues().calculateTopPadding()
-    val bottomInset = WindowInsets.systemBars.asPaddingValues().calculateBottomPadding()
+    val insets = WindowInsets.systemBars.asPaddingValues()
+    val topInset = insets.calculateTopPadding()
+    val bottomInset = insets.calculateBottomPadding()
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val screenHeightPx = with(density) { maxHeight.toPx() }
-        val headerEarthPx = with(density) { HeaderEarthSize.toPx() }
-        val earthTopEnd = topInset + (EndHeaderHeight - HeaderEarthSize) / 2
-        val earthCenterEnd = with(density) { earthTopEnd.toPx() } + headerEarthPx / 2f
-        val startEarthWidth = with(density) { maxWidth.toPx() } * 2f
-        val earthCenterStart = screenHeightPx - startEarthWidth * 0.24f
-        val earthScaleStart = startEarthWidth / headerEarthPx
-        val earthRise = earthCenterStart - earthCenterEnd
-
-        val stackAnchor = with(density) { (topInset + EndHeaderHeight).toPx() }
-        // Bottom edge of the earth in its small end-state, and the gap from there down
-        // to the card stack. Re-applying this gap to the earth's live bottom edge lets the
-        // growing earth (and the title above it) push the cards down as one column.
-        val earthBottomEnd = earthCenterEnd + headerEarthPx / 2f
-        val earthCardGap = stackAnchor - earthBottomEnd
+    BoxWithConstraints(Modifier.fillMaxSize()) {
         var cardHeightPx by remember { mutableFloatStateOf(with(density) { CardHeight.toPx() }) }
-        val stepPx = cardHeightPx + with(density) { CardGap.toPx() }
-        val peekPx = with(density) { CardStackPeek.toPx() }
-        val transitionPx = (screenHeightPx - stackAnchor).coerceAtLeast(1f)
-
+        val metrics = rememberTransitionMetrics(maxWidth, maxHeight, topInset, bottomInset, cardHeightPx)
         val pagerState = rememberPagerState(pageCount = { planets.size + 1 })
-        val scroll = {
-            val page = pagerState.currentPage + pagerState.currentPageOffsetFraction
-            if (page <= 1f) page * transitionPx
-            else transitionPx + (page - 1f) * (stepPx - peekPx)
+        val scroll = remember(metrics, pagerState) {
+            { metrics.scrollOf(pagerState.currentPage + pagerState.currentPageOffsetFraction) }
         }
-        val progress = { (scroll() / transitionPx).coerceIn(0f, 1f) }
+        val progress = remember(metrics, scroll) { { metrics.progressOf(scroll()) } }
+        val topZIndex = planets.size.toFloat()
 
-        val enterFromPx = -with(density) { (EndHeaderHeight + topInset).toPx() }
-        val inSecondState = pagerState.currentPage >= 1
-
-        var titleEntered by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { titleEntered = true }
-        val titleLaunch by animateFloatAsState(
-            targetValue = if (titleEntered) 0f else enterFromPx,
-            animationSpec = EnterTween,
-            label = "titleLaunch",
-        )
-
-        val hintEnterFromPx = with(density) { (SwipeHintHeight + bottomInset).toPx() }
-        var hintEntered by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { hintEntered = true }
-        val hintLaunch by animateFloatAsState(
-            targetValue = if (hintEntered) 0f else hintEnterFromPx,
-            animationSpec = EnterTween,
-            label = "hintLaunch",
-        )
-
-        Box(modifier = Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().background(SpaceBlack))
-
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(StartSkyGradient)))
-
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { alpha = endAlpha(progress()) }
-                    .background(Brush.verticalGradient(EndSkyGradient))
-            )
-
-            StarBackground(Modifier.alpha(0.4f))
-
-            VerticalPager(
-                state = pagerState,
-                flingBehavior = PagerDefaults.flingBehavior(
-                    state = pagerState,
-                    snapAnimationSpec = TransitionSpring,
-                ),
-                modifier = Modifier.fillMaxSize(),
-            ) { }
-
-            planets.forEachIndexed { index, planet ->
-                val cardEnter by animateFloatAsState(
-                    targetValue = if (inSecondState) 1f else 0f,
-                    animationSpec = tween(
-                        durationMillis = CardEnterDurationMs,
-                        delayMillis = (if (inSecondState) index else planets.lastIndex - index) * CardStaggerMs,
-                        easing = FastOutSlowInEasing,
-                    ),
-                    label = "cardEnter$index",
-                )
-                PlanetCard(
-                    planet = planet,
-                    planetAlpha = {
-                        val frontPos = ((scroll() - transitionPx) / (stepPx - peekPx))
-                            .coerceAtLeast(0f)
-                        val depth = (frontPos - index).coerceIn(0f, 1f)
-                        1f - depth * (1f - BackPlanetMinAlpha)
-                    },
-                    modifier = Modifier
-                        .zIndex(index.toFloat())
-                        .fillMaxWidth()
-                        .onSizeChanged { cardHeightPx = it.height.toFloat() }
-                        .offset {
-                            val p = progress()
-                            val scale = earthScaleStart + (1f - earthScaleStart) * p
-                            val earthCenter = earthCenterEnd + (1f - p) * earthRise
-                            val earthBottom = earthCenter + headerEarthPx / 2f * scale
-                            // The stack top follows the growing earth's bottom edge, so the
-                            // earth and title push the cards down as if in the same column.
-                            val anchor = (earthBottom + earthCardGap).coerceAtLeast(stackAnchor)
-                            val natural = screenHeightPx + index * stepPx - scroll()
-                            val stick = anchor + index * peekPx
-                            IntOffset(0, natural.coerceAtLeast(stick).roundToInt())
-                        }
-                        .graphicsLayer {
-                            translationY = (1f - cardEnter) * CardEnterRise.toPx()
-                        },
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(planets.size.toFloat()),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = earthTopEnd)
-                        .size(HeaderEarthSize)
-                        .graphicsLayer {
-                            val p = progress()
-                            val scale = earthScaleStart + (1f - earthScaleStart) * p
-                            scaleX = scale
-                            scaleY = scale
-                            translationY = (1f - p) * earthRise
-                        },
-                ) {
-                    Image(
-                        painter = painterResource(R.drawable.earth),
-                        contentDescription = null,
-                        colorFilter = ColorFilter.tint(EarthGlow.copy(alpha = 1f)),
-                        modifier = Modifier
-                            .matchParentSize()
-                            .offset(y = EarthGlowOffset)
-                            .blur(EarthGlowBlur, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                            .graphicsLayer { alpha = EarthGlow.alpha * (1f - progress()) },
-                    )
-                    Image(
-                        painter = painterResource(R.drawable.earth),
-                        contentDescription = stringResource(R.string.cd_earth),
-                        modifier = Modifier
-                            .matchParentSize()
-                            .graphicsLayer { alpha = 1f - progress() * 0.5f },
-                    )
-                }
-                HeaderTexts(
-                    topInset = topInset,
-                    modifier = Modifier.graphicsLayer {
-                        val enter = ((progress() - 0.5f) / 0.5f).coerceIn(0f, 1f)
-                        translationY = (1f - enter) * enterFromPx
-                    },
-                )
-            }
-
-            TitleBlock(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .zIndex(planets.size.toFloat())
-                    .graphicsLayer {
-                        val exit = (progress() / 0.5f).coerceIn(0f, 1f)
-                        translationY = titleLaunch + exit * enterFromPx
-                    },
-            )
-
-            SwipeHint(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .zIndex(planets.size.toFloat())
-                    .graphicsLayer {
-                        val exit = (progress() / 0.5f).coerceIn(0f, 1f)
-                        translationY = hintLaunch + exit * hintEnterFromPx
-                        alpha = startAlpha(progress())
-                    },
-            )
+        Box(Modifier.fillMaxSize()) {
+            SkyBackdrop(progress)
+            ScrollDriver(pagerState)
+            PlanetCardStack(metrics, pagerState, scroll, progress) { cardHeightPx = it }
+            HeaderLayer(metrics, topInset, topZIndex, progress)
+            AnimatedTitle(metrics.enterFromPx, topZIndex, progress)
+            AnimatedSwipeHint(metrics.hintEnterFromPx, topZIndex, progress)
         }
     }
+}
+
+@Composable
+private fun SkyBackdrop(progress: () -> Float) {
+    Box(Modifier.fillMaxSize().background(SpaceBlack))
+    Box(Modifier.fillMaxSize().background(StartSkyBrush))
+    Box(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer { alpha = endAlpha(progress()) }
+            .background(EndSkyBrush),
+    )
+    StarBackground(Modifier.alpha(StarFieldAlpha))
+}
+
+@Composable
+private fun ScrollDriver(pagerState: PagerState, modifier: Modifier = Modifier) {
+    VerticalPager(
+        state = pagerState,
+        flingBehavior = PagerDefaults.flingBehavior(pagerState, snapAnimationSpec = TransitionSpring),
+        modifier = modifier.fillMaxSize(),
+    ) {}
+}
+
+@Composable
+private fun PlanetCardStack(
+    metrics: TransitionMetrics,
+    pagerState: PagerState,
+    scroll: () -> Float,
+    progress: () -> Float,
+    onCardHeight: (Float) -> Unit,
+) {
+    val cardEnters = remember { List(planets.size) { Animatable(0f) } }
+    LaunchedEffect(pagerState, cardEnters) {
+        snapshotFlow { pagerState.currentPage >= 1 }.collectLatest { inStack ->
+            coroutineScope {
+                cardEnters.forEachIndexed { index, anim ->
+                    launch {
+                        val steps = if (inStack) index else planets.lastIndex - index
+                        anim.animateTo(
+                            targetValue = if (inStack) 1f else 0f,
+                            animationSpec = tween(
+                                durationMillis = CardEnterDurationMs,
+                                delayMillis = steps * CardStaggerMs,
+                                easing = FastOutSlowInEasing,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    planets.forEachIndexed { index, planet ->
+        val cardEnter = cardEnters[index]
+        PlanetCard(
+            planet = planet,
+            planetAlpha = { metrics.planetDepthAlpha(index, scroll()) },
+            modifier = Modifier
+                .zIndex(index.toFloat())
+                .fillMaxWidth()
+                .onSizeChanged { onCardHeight(it.height.toFloat()) }
+                .offset { IntOffset(0, metrics.cardOffsetY(index, scroll(), progress())) }
+                .graphicsLayer { translationY = (1f - cardEnter.value) * CardEnterRise.toPx() },
+        )
+    }
+}
+
+@Composable
+private fun HeaderLayer(
+    metrics: TransitionMetrics,
+    topInset: Dp,
+    topZIndex: Float,
+    progress: () -> Float,
+) {
+    Box(Modifier.fillMaxSize().zIndex(topZIndex)) {
+        EarthHeader(metrics, progress, Modifier.align(Alignment.TopCenter))
+        HeaderTexts(
+            topInset = topInset,
+            modifier = Modifier.graphicsLayer {
+                translationY = (1f - endAlpha(progress())) * metrics.enterFromPx
+            },
+        )
+    }
+}
+
+@Composable
+private fun EarthHeader(
+    metrics: TransitionMetrics,
+    progress: () -> Float,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .padding(top = metrics.earthTopEnd)
+            .size(HeaderEarthSize)
+            .graphicsLayer {
+                val p = progress()
+                val scale = metrics.earthScale(p)
+                scaleX = scale
+                scaleY = scale
+                translationY = (1f - p) * metrics.earthRise
+            },
+    ) {
+        GlowingImage(
+            painter = painterResource(R.drawable.earth),
+            contentDescription = stringResource(R.string.cd_earth),
+            glowColor = EarthGlow.copy(alpha = 1f),
+            glowBlur = EarthGlowBlur,
+            imageSize = HeaderEarthSize,
+            glowOffsetY = EarthGlowOffset,
+            glowAlpha = { EarthGlow.alpha * (1f - progress()) },
+            imageAlpha = { 1f - progress() * EarthImageFade },
+        )
+    }
+}
+
+@Composable
+private fun BoxScope.AnimatedTitle(enterFromPx: Float, topZIndex: Float, progress: () -> Float) {
+    val launch by rememberEnterOffset(enterFromPx)
+    TitleBlock(
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .zIndex(topZIndex)
+            .graphicsLayer { translationY = launch + exitFraction(progress()) * enterFromPx },
+    )
+}
+
+@Composable
+private fun BoxScope.AnimatedSwipeHint(enterFromPx: Float, topZIndex: Float, progress: () -> Float) {
+    val launch by rememberEnterOffset(enterFromPx)
+    SwipeHint(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .zIndex(topZIndex)
+            .graphicsLayer {
+                translationY = launch + exitFraction(progress()) * enterFromPx
+                alpha = startAlpha(progress())
+            },
+    )
+}
+
+@Composable
+private fun rememberEnterOffset(enterFromPx: Float) = run {
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+    animateFloatAsState(
+        targetValue = if (entered) 0f else enterFromPx,
+        animationSpec = EnterTween,
+        label = "enterOffset",
+    )
 }
 
 @Composable
@@ -482,7 +586,7 @@ private fun TitleBlock(modifier: Modifier = Modifier) {
         modifier = modifier
             .systemBarsPadding()
             .fillMaxWidth()
-            .padding(top = 56.dp, start = 24.dp, end = 24.dp),
+            .padding(top = TitleTopPadding, start = ScreenPadding, end = ScreenPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -503,7 +607,7 @@ private fun HeaderTexts(topInset: Dp, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = ScreenPadding),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -519,14 +623,14 @@ private fun SwipeHint(modifier: Modifier = Modifier) {
         modifier = modifier
             .systemBarsPadding()
             .fillMaxWidth()
-            .padding(bottom = 28.dp),
+            .padding(bottom = SwipeHintBottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
     ) {
         Column {
-            UpChevron(Modifier.size(28.dp).alpha(0.5f))
-            UpChevron(Modifier.size(28.dp).alpha(0.6f))
-            UpChevron(Modifier.size(28.dp).alpha(0.9f))
+            UpChevron(Modifier.size(ChevronSize).alpha(0.5f))
+            UpChevron(Modifier.size(ChevronSize).alpha(0.6f))
+            UpChevron(Modifier.size(ChevronSize).alpha(0.9f))
         }
         Text(text = stringResource(R.string.swipe_to_explore), style = SwipeHintStyle)
     }
@@ -548,6 +652,39 @@ private fun UpChevron(modifier: Modifier = Modifier) {
             ),
         ),
     )
+}
+
+@Composable
+private fun GlowingImage(
+    painter: Painter,
+    contentDescription: String?,
+    glowColor: Color,
+    glowBlur: Dp,
+    imageSize: Dp,
+    glowAlpha: () -> Float,
+    imageAlpha: () -> Float,
+    modifier: Modifier = Modifier,
+    glowOffsetY: Dp = 0.dp,
+) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Image(
+            painter = painter,
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(glowColor),
+            modifier = Modifier
+                .size(imageSize)
+                .offset(y = glowOffsetY)
+                .blur(glowBlur, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                .graphicsLayer { alpha = glowAlpha() },
+        )
+        Image(
+            painter = painter,
+            contentDescription = contentDescription,
+            modifier = Modifier
+                .size(imageSize)
+                .graphicsLayer { alpha = imageAlpha() },
+        )
+    }
 }
 
 @Composable
@@ -593,24 +730,16 @@ private fun PlanetCardSurface(planet: Planet, contentTopInset: Dp) {
 
 @Composable
 private fun PlanetImage(planet: Planet, alpha: () -> Float, modifier: Modifier = Modifier) {
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        Image(
-            painter = painterResource(planet.imageRes),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(planet.glowColor),
-            modifier = Modifier
-                .size(PlanetImageSize)
-                .blur(PlanetGlowBlur, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                .graphicsLayer { this.alpha = planet.glowColor.alpha * alpha() },
-        )
-        Image(
-            painter = painterResource(planet.imageRes),
-            contentDescription = planet.name,
-            modifier = Modifier
-                .size(PlanetImageSize)
-                .graphicsLayer { this.alpha = alpha() },
-        )
-    }
+    GlowingImage(
+        painter = painterResource(planet.imageRes),
+        contentDescription = planet.name,
+        glowColor = planet.glowColor,
+        glowBlur = PlanetGlowBlur,
+        imageSize = PlanetImageSize,
+        glowAlpha = { planet.glowColor.alpha * alpha() },
+        imageAlpha = alpha,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -636,27 +765,34 @@ private fun PlanetHeader(planet: Planet, planetAlpha: () -> Float, modifier: Mod
 @Composable
 private fun PlanetStats(planet: Planet) {
     Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            StatCell(R.drawable.icon_weight, stringResource(R.string.stat_weight), planet.weight, null, Modifier.weight(1f))
-            StatDivider()
-            StatCell(R.drawable.icon_sun, stringResource(R.string.stat_day), planet.dayLength, null, Modifier.weight(1f))
-        }
+        StatRow(
+            leading = { StatCell(R.drawable.icon_weight, stringResource(R.string.stat_weight), planet.weight, modifier = it) },
+            trailing = { StatCell(R.drawable.icon_sun, stringResource(R.string.stat_day), planet.dayLength, modifier = it) },
+        )
         HorizontalDivider(
             color = White16,
             thickness = 0.5.dp,
             modifier = Modifier.padding(vertical = 16.dp),
         )
-        Row(
-            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            StatCell(R.drawable.icon_thermometer, stringResource(R.string.stat_temperature), planet.temperature, planet.temperatureNote, Modifier.weight(1f))
-            StatDivider()
-            StatCell(R.drawable.icon_info, stringResource(R.string.stat_additional), planet.additionalInfo, null, Modifier.weight(1f))
-        }
+        StatRow(
+            leading = { StatCell(R.drawable.icon_thermometer, stringResource(R.string.stat_temperature), planet.temperature, it,planet.temperatureNote, ) },
+            trailing = { StatCell(R.drawable.icon_info, stringResource(R.string.stat_additional), planet.additionalInfo, modifier = it) },
+        )
+    }
+}
+
+@Composable
+private fun StatRow(
+    leading: @Composable (Modifier) -> Unit,
+    trailing: @Composable (Modifier) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        leading(Modifier.weight(1f))
+        StatDivider()
+        trailing(Modifier.weight(1f))
     }
 }
 
@@ -676,8 +812,8 @@ private fun StatCell(
     iconRes: Int,
     label: String,
     value: String,
-    note: String?,
     modifier: Modifier = Modifier,
+    note: String? = null,
 ) {
     Row(
         modifier = modifier,

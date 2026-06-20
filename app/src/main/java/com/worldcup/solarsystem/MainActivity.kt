@@ -55,7 +55,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.shadow.Shadow as LayerShadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.onSizeChanged
@@ -77,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
+import androidx.compose.ui.graphics.shadow.Shadow as LayerShadow
 
 private val SpaceBlack = Color(0xFF0D0608)
 private val White = Color(0xFFFFFFFF)
@@ -195,9 +195,9 @@ private val StatNoteStyle = TextStyle(
 )
 
 private val HeaderEarthSize = 220.dp
-private val EndHeaderHeight = 360.dp
+private val EndHeaderHeight = 300.dp
 private val CardHeight = 300.dp
-private val CardGap = 32.dp
+private val CardGap = 22.dp
 private val CardStackPeek = 16.dp
 private val CardEnterRise = 60.dp
 private val PlanetOverhang = 20.dp

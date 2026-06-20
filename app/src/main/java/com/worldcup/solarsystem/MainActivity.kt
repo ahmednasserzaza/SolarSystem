@@ -6,7 +6,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.InfiniteTransition
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -52,7 +59,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -75,7 +81,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -84,8 +89,9 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.math.PI
 import kotlin.math.roundToInt
-import androidx.compose.ui.graphics.shadow.Shadow as LayerShadow
+import kotlin.math.sin
 
 // region Design tokens -------------------------------------------------------
 
@@ -224,6 +230,10 @@ private val ScreenPadding = 24.dp
 private val TitleTopPadding = 56.dp
 private val SwipeHintBottomPadding = 28.dp
 private val ChevronSize = 28.dp
+private val ChevronTravel = 10.dp
+private const val ChevronCycleMs = 1400
+private const val ChevronStaggerMs = 160
+private const val ChevronMinAlpha = 0.15f
 
 private const val BackPlanetMinAlpha = 0.35f
 private const val StarFieldAlpha = 0.4f
@@ -627,30 +637,44 @@ private fun SwipeHint(modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
     ) {
+        val transition = rememberInfiniteTransition(label = "chevrons")
         Column {
-            UpChevron(Modifier.size(ChevronSize).alpha(0.5f))
-            UpChevron(Modifier.size(ChevronSize).alpha(0.6f))
-            UpChevron(Modifier.size(ChevronSize).alpha(0.9f))
+            repeat(3) { index ->
+                UpChevron(transition = transition, index = index)
+            }
         }
         Text(text = stringResource(R.string.swipe_to_explore), style = SwipeHintStyle)
     }
 }
 
 @Composable
-private fun UpChevron(modifier: Modifier = Modifier) {
+private fun UpChevron(
+    transition: InfiniteTransition,
+    index: Int,
+    modifier: Modifier = Modifier,
+) {
+    val progress = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = ChevronCycleMs, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+            initialStartOffset = StartOffset(index * ChevronStaggerMs),
+        ),
+        label = "chevron-$index",
+    )
+    val travelPx = with(LocalDensity.current) { ChevronTravel.toPx() }
     Icon(
         painter = painterResource(R.drawable.icon_arrow_up),
         contentDescription = null,
         tint = White,
-        modifier = modifier.dropShadow(
-            shape = RoundedCornerShape(24.dp),
-            shadow = LayerShadow(
-                color = HintShadow,
-                radius = 16.dp,
-                spread = 0.dp,
-                offset = DpOffset(0.dp, 4.dp),
-            ),
-        ),
+        modifier = modifier
+            .size(ChevronSize)
+            .graphicsLayer {
+                val p = progress.value
+                alpha = ChevronMinAlpha + (1f - ChevronMinAlpha) * sin(p * PI).toFloat()
+                translationY = -travelPx * p
+            }
     )
 }
 

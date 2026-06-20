@@ -84,7 +84,7 @@ private val White88 = Color(0xE0FFFFFF)
 private val White80 = Color(0xCCFFFFFF)
 private val White66 = Color(0xA8FFFFFF)
 private val White16 = Color(0x29FFFFFF)
-private val CardFill = Color(0xCC0B1223)
+private val CardFill = Color(0xFF0B1223)
 private val CardBorder = Color(0xFF2F2E2E)
 private val StatNoteColor = Color(0xFF8B94A9)
 private val EarthGlow = Color(0x404197E7)
@@ -199,6 +199,7 @@ private val EndHeaderHeight = 300.dp
 private val CardHeight = 300.dp
 private val CardGap = 22.dp
 private val CardStackPeek = 16.dp
+private const val BackPlanetMinAlpha = 0.35f
 private val CardEnterRise = 60.dp
 private val PlanetOverhang = 20.dp
 private val PlanetImageSize = 112.dp
@@ -352,6 +353,12 @@ private fun SolarSystemScreen() {
                 )
                 PlanetCard(
                     planet = planet,
+                    planetAlpha = {
+                        val frontPos = ((scroll() - transitionPx) / (stepPx - peekPx))
+                            .coerceAtLeast(0f)
+                        val depth = (frontPos - index).coerceIn(0f, 1f)
+                        1f - depth * (1f - BackPlanetMinAlpha)
+                    },
                     modifier = Modifier
                         .zIndex(index.toFloat())
                         .fillMaxWidth()
@@ -362,7 +369,6 @@ private fun SolarSystemScreen() {
                             IntOffset(0, natural.coerceAtLeast(stick).roundToInt())
                         }
                         .graphicsLayer {
-                            alpha = cardEnter
                             translationY = (1f - cardEnter) * CardEnterRise.toPx()
                         },
                 )
@@ -518,9 +524,9 @@ private fun UpChevron(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PlanetCard(planet: Planet, modifier: Modifier = Modifier) {
+private fun PlanetCard(planet: Planet, planetAlpha: () -> Float, modifier: Modifier = Modifier) {
     SubcomposeLayout(modifier = modifier.padding(horizontal = 20.dp)) { constraints ->
-        val header = subcompose(CardSlot.Header) { PlanetHeader(planet) }
+        val header = subcompose(CardSlot.Header) { PlanetHeader(planet, planetAlpha) }
             .first()
             .measure(constraints.copy(minWidth = 0, minHeight = 0))
 
@@ -559,7 +565,7 @@ private fun PlanetCardSurface(planet: Planet, contentTopInset: Dp) {
 }
 
 @Composable
-private fun PlanetImage(planet: Planet, alpha: Float, modifier: Modifier = Modifier) {
+private fun PlanetImage(planet: Planet, alpha: () -> Float, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Image(
             painter = painterResource(planet.imageRes),
@@ -568,20 +574,20 @@ private fun PlanetImage(planet: Planet, alpha: Float, modifier: Modifier = Modif
             modifier = Modifier
                 .size(PlanetImageSize)
                 .blur(PlanetGlowBlur, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                .alpha(planet.glowColor.alpha * alpha),
+                .graphicsLayer { this.alpha = planet.glowColor.alpha * alpha() },
         )
         Image(
             painter = painterResource(planet.imageRes),
             contentDescription = planet.name,
             modifier = Modifier
                 .size(PlanetImageSize)
-                .alpha(alpha),
+                .graphicsLayer { this.alpha = alpha() },
         )
     }
 }
 
 @Composable
-private fun PlanetHeader(planet: Planet, modifier: Modifier = Modifier) {
+private fun PlanetHeader(planet: Planet, planetAlpha: () -> Float, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -589,7 +595,7 @@ private fun PlanetHeader(planet: Planet, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        PlanetImage(planet, alpha = 1f)
+        PlanetImage(planet, alpha = planetAlpha)
         Column(
             modifier = Modifier.padding(top = 14.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),

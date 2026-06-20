@@ -49,3 +49,4 @@ captures/
 # Keystore files
 *.jks
 *.keystore
+/app/release/baselineProfiles/0/app-release.dm
